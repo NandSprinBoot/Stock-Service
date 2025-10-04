@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: Stock-Service
+  radis:
+    host: localhost
+    port: 6379
+
+  profiles:
+    active: kafka, local
+
+
+server:
+  port: 9093
+  
+  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+logging:
+  level:
+    org:
+      springframework:
+        cache: DEBUG
+        data:
+          redis:
+            cache: DEBUG
