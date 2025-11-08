@@ -4,7 +4,12 @@ import java.util.List;
 import java.util.Optional;
 
 import com.stock.request.StockResource;
+import jakarta.transaction.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -12,7 +17,7 @@ import org.springframework.stereotype.Repository;
 import com.stock.bean.Stock;
 
 @Repository
-public interface StockRepository extends JpaRepository<Stock, Long>{
+public interface StockRepository extends JpaRepository<Stock, Long>, JpaSpecificationExecutor<Stock> {
 
 	public Stock findByName(String name);
 	
@@ -25,4 +30,11 @@ public interface StockRepository extends JpaRepository<Stock, Long>{
               and (:#{#stockResource.brand} is null or lower(stock.brand) like lower(concat('%', :#{#stockResource.brand}, '%')))
            """)
     List<Stock> getStockDetails(@Param("stockResource") StockResource stockResource);
+
+    Page<Stock> findByNameContainingIgnoreCase(String name, Pageable pageable);
+
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM Stock s WHERE s.name = :name")
+    void deleteByName(@Param("name") String name);
 }

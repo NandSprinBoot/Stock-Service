@@ -11,6 +11,7 @@ import com.stock.repository.StockRepository;
 import com.stock.request.StockResource;
 import com.stock.response.PageResponse;
 import com.stock.response.StockResponse;
+import com.stock.service.StockService;
 import com.stock.utils.PaginationUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,7 +40,7 @@ import java.util.List;
 @Slf4j
 @RequiredArgsConstructor
 @CacheConfig(cacheNames = "stockDetails")
-public class StockServiceImpl {
+public class StockServiceImpl implements StockService {
 
     private final RedisTemplate<String, Object> redisTemplate;
 
@@ -51,6 +52,7 @@ public class StockServiceImpl {
 
     private final RedisCacheManager cacheManager;
 
+    @Override
     public ResponseEntity<String> createStock(Stock stock) throws Exception {
         Stock stockSaved = stockRepository.save(stock);
         refreshAllStocksCache();
@@ -118,6 +120,7 @@ public class StockServiceImpl {
         return response;
     }
 
+    @Override
     @Cacheable(
             key = "'brand:' + (#stockResource.brand != null && #stockResource.brand.trim().length() > 0 ? #stockResource.brand : 'ALL') + " +
                     "':name:' + (#stockResource.name != null && #stockResource.name.trim().length() > 0 ? #stockResource.name : 'ALL')"
@@ -167,6 +170,7 @@ public class StockServiceImpl {
         }
     }
 
+    @Override
     public PageResponse<StockResponse> getStocksForOrderCreation(String stockName, PageRequestDto pageRequestDto){
         Pageable pageable = PaginationUtils.createPageRequest(pageRequestDto);
 
@@ -180,6 +184,7 @@ public class StockServiceImpl {
         return PageResponse.from(mappedPage);
     }
 
+    @Override
     public void deleteStocks(String stockName){
         stockRepository.deleteByName(stockName);
     }
