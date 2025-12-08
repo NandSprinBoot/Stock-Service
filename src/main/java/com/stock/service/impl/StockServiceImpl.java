@@ -1,18 +1,24 @@
 package com.stock.service.impl;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stock.bean.Order;
+import com.stock.bean.ProcessedEvent;
 import com.stock.bean.Stock;
 import com.stock.dto.ItemDTO;
+import com.stock.dto.KafkaEvent;
 import com.stock.dto.OrderDTO;
 import com.stock.dto.PageRequestDto;
 import com.stock.exception.NoStockFound;
 import com.stock.mapper.StockMapper;
+import com.stock.repository.ProcessedEventRepository;
 import com.stock.repository.StockRepository;
 import com.stock.request.StockResource;
 import com.stock.response.PageResponse;
 import com.stock.response.StockResponse;
 import com.stock.service.StockService;
 import com.stock.utils.PaginationUtils;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang.StringUtils;
@@ -28,12 +34,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -51,6 +59,10 @@ public class StockServiceImpl implements StockService {
     private final KafkaTemplate<String, Order> kafkaTemplate;
 
     private final RedisCacheManager cacheManager;
+
+    private final ProcessedEventRepository processedRepo;
+
+    private final ObjectMapper mapper;
 
     @Override
     public ResponseEntity<String> createStock(Stock stock) throws Exception {
@@ -79,7 +91,7 @@ public class StockServiceImpl implements StockService {
         }
     }*/
 
-    @KafkaListener(topics = {"order-created"}, groupId = "order-group")
+    //@KafkaListener(topics = {"order-created"}, groupId = "order-group")
     public void updateStockIfOrderCompleted(@Payload ConsumerRecord<String, Object> consumerRecord,
                                             @Header(KafkaHeaders.RECEIVED_TOPIC) String topic) {
         System.out.println("=====Inside Stock updateStockIfOrderCompleted====================" + consumerRecord);
@@ -188,5 +200,87 @@ public class StockServiceImpl implements StockService {
     public void deleteStocks(String stockName){
         stockRepository.deleteByName(stockName);
     }
+
+    @KafkaListener(topics = "orders.events", groupId = "stock-service", containerFactory = "kafkaListenerContainerFactory")
+    public void onOrder(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
+        String msg = record.value();
+        System.out.println("RAW MSG = " + msg);
+        JsonNode root  = mapper.readTree(msg);
+        String eventId = root .path("eventId").asText(null);
+        String eventType = root .path("eventType").asText(null);
+        System.out.println(root );
+        //String eventId1 = root.path("eventId").asText(null);
+        //String eventType1 = root.path("eventType").asText(null);
+
+        System.out.println("Parsed eventId = " + eventId);
+        // 1) If eventId missing -> treat as recoverable failure (retry then DLQ)
+        if (eventId == null) {
+            log.warn("Missing eventId in message; throwing to trigger retry/DLQ. msg={}", msg);
+            // Throw to let DefaultErrorHandler handle retries -> DLQ if retries exhausted.
+            throw new IllegalArgumentException("Missing eventId");
+        }
+
+        // 2) Idempotency: skip already processed events
+        if (processedRepo.existsById(eventId)) {
+            log.info("Event {} already processed. Acknowledging and skipping.", eventId);
+            ack.acknowledge();
+            return;
+        }
+
+        try {
+            // handle the event type you expect for stock changes
+            if ("OrderConfirmed".equalsIgnoreCase(eventType) || "OrderConfirmed.v1".equalsIgnoreCase(eventType)) {
+                JsonNode payload = root.path("payload");
+                processOrder(payload, eventId); // transactional method
+            } else {
+                log.info("Ignoring eventType={} for eventId={}", eventType, eventId);
+            }
+
+            // mark processed (idempotency) ONLY after successful processing
+            processedRepo.save(new ProcessedEvent(eventId));
+
+            // commit the offset
+            ack.acknowledge();
+            log.info("Successfully processed eventId={}. Offset committed.", eventId);
+
+        } catch (Exception ex) {
+            log.error("Processing failed for eventId={}, throwing to trigger retry.", eventId, ex);
+            // rethrow so DefaultErrorHandler will trigger retry / DLQ
+            throw ex;
+        }
+    }
+
+    @Transactional
+    public void processOrder(JsonNode payload, String eventId) throws Exception {
+        // Convert payload JSON to OrderDTO
+        OrderDTO orderDTO = mapper.treeToValue(payload, OrderDTO.class);
+
+        if (orderDTO == null) {
+            throw new IllegalArgumentException("Payload cannot be parsed to OrderDTO for eventId=" + eventId);
+        }
+
+        log.info("Processing order for eventId={}, ordId={}, ordStatus={}",
+                eventId, orderDTO.getOrdId(), orderDTO.getOrdStatus());
+
+        // Business rule: only process when status is CONFIRMED
+        if (!"CONFIRMED".equalsIgnoreCase(orderDTO.getOrdStatus())) {
+            log.info("Skipping stock update since order status is not CONFIRMED: {}", orderDTO.getOrdStatus());
+            return;
+        }
+
+        // For each item, decrement stock. If any item insufficient -> throw and rollback.
+        List<ItemDTO> items = orderDTO.getItem();
+        if (items == null || items.isEmpty()) {
+            log.warn("Order has no items. Nothing to update for eventId={}", eventId);
+            return;
+        }
+
+        items.stream().map(item -> {
+            updateStockOnOrderCreation(item);
+            return item; // Return the item (or something else if needed)
+        }).toList();
+    }
+
+
 
 }

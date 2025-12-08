@@ -5,9 +5,10 @@ import com.stock.dto.PageRequestDto;
 import com.stock.request.StockResource;
 import com.stock.response.PageResponse;
 import com.stock.response.StockResponse;
-import com.stock.service.impl.StockServiceImpl;
+import com.stock.service.StockService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -21,7 +22,7 @@ import java.util.List;
 @Slf4j
 public class StockController {
 
-    private final StockServiceImpl stockService;
+    private final StockService stockService;
 
     @PostMapping("/create")
     public ResponseEntity<String> createStock(@RequestBody Stock stock) {
